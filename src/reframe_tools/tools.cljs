@@ -1,6 +1,7 @@
 (ns reframe-tools.tools
   (:require [re-frame.core :as rf]
-            [re-frame.db :refer [app-db]]))
+            [clojure.core.async :as async :refer [<!]])
+  (:require-macros [cljs.core.async.macros :refer [go-loop]]))
 
 (defonce tape (atom []))
 (defonce replaying (atom false))
@@ -20,19 +21,25 @@
   (->> @tape
        (filter #(> time (:time %)))
        last
-       :db))
+       :db-after))
 
 (defn db-at-mark [{:keys [start-time]}]
   (db-at-time start-time))
 
-(defn get-marked-tape [{:keys [start-time end-time]}]
-  (->> @tape
-       (filter #(<= start-time (:time %) end-time))))
+(defn db-before-tape [tape]
+  (-> (first tape)
+      :time
+      dec
+      db-at-time))
 
-(defn replay!
+(defn marked-tape [{:keys [start-time end-time]}]
+  (->> @tape
+       (filter #(<= start-time (:time %) end-time))
+       vec))
+
+(defn instant-replay!
   ([tape-to-replay]
-   (let [[first-tape-entry] tape-to-replay]
-     (replay! tape-to-replay (db-at-time (dec (:time first-tape-entry))))))
+   (instant-replay! tape-to-replay (db-before-tape tape-to-replay)))
   
   ([tape-to-replay initial-db]
    (let [events (map :event tape-to-replay)]
@@ -43,6 +50,33 @@
      (reset! replaying false)
      nil)))
 
+(defn replay!
+  ([tape-to-replay]
+   (replay! tape-to-replay (db-before-tape tape-to-replay)))
+  ([tape-to-replay initial-db]
+   (replay! tape-to-replay initial-db 1))
+  ([tape-to-replay initial-db speed]
+   (let [start-time (:time (first tape-to-replay))
+         events-with-time (->> tape-to-replay
+                               (map (fn [event]
+                                      (update event :time #(- % start-time))))
+                               (map (juxt :event :time)))]
+     (reset! replaying true)
+     (rf/dispatch-sync [::reset initial-db])
+     (go-loop [[[event time] & other-events] events-with-time]
+       (<! (async/timeout (/ time speed)))
+       (rf/dispatch-sync event)
+       (if other-events
+         (recur other-events)
+         (reset! replaying false)))
+     nil)))
+
+(defn slowmo-replay!
+  ([tape-to-replay initial-db]
+   (replay! tape-to-replay initial-db 0.25))
+  ([tape-to-replay]
+   (replay! tape-to-replay (db-before-tape tape-to-replay) 0.25)))
+
 (def recordable
   (rf/->interceptor
    :id :record
@@ -50,7 +84,7 @@
             (let [db (get-in context [:effects :db])
                   [event-type :as event] (get-in context [:coeffects :event])]
               (swap! tape #(conj % {:time (current-time)
-                                    :db db
+                                    :db-after db
                                     :event event}))
               (if @replaying
                 (update context :effects #(select-keys % [:db]))
