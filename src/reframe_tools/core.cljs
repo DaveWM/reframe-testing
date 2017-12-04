@@ -1,7 +1,7 @@
 (ns reframe-tools.core
   (:require [reagent.core :as r]
             [re-frame.core :as rf]
-            [reframe-tools.tools :refer [recordable] :as tools]
+            [re-play.core :refer [recordable] :as rp]
             [day8.re-frame.http-fx]
             [ajax.core :as ajax]))
 
@@ -72,7 +72,7 @@
    [:h1 "Hello World"]
    [:p (str "Count: " @(rf/subscribe [:count]))]
    (if @(rf/subscribe [:loading])
-     [:p "Loading Data..."]
+     [:p "Loading!"]
      [:p (str "Repos: " @(rf/subscribe [:repos]))])
    [:button {:on-click #(rf/dispatch [:increment-count])} "Inc"]
    [:button {:on-click #(rf/dispatch [:decrement-count])} "Dec"]
